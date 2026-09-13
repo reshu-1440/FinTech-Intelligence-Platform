@@ -1,16 +1,17 @@
 """
 Comprehensive Unit and Integration Test Suite for TransOrg AgentIQ Datathon Track 1.
 Validates:
-- ID standardizers
-- Currency & amount cleaner
-- Datetime parser
-- Transaction status normalizer
-- KYC fields & MCC cleaners
-- Chargebacks JSON parser & amount imputation
+- ID standardizers (user_id, merchant_id, txn_id, complaint_id)
+- Currency & amount cleaners (INR, Rs, symbols, commas, k/m multipliers, negative values)
+- Datetime parser (epoch s/ms, ISO strings, mixed formats)
+- Transaction status normalizer (SUCCESS, FAILED, PENDING)
+- KYC cleaners (PAN, Aadhaar masking, City/State harmonization, KYC status, Risk segments)
+- MCC codes & Category normalization
 - Relational data model and ETL exports
-- Business metrics engine
+- Business metrics engine & dynamic slice filtering
+- Merchant ticket size anomaly detection
 - Graph-First AI Agent & Fraud Ring detection
-- All 12 Datathon Example Agent Queries
+- All Datathon Example Agent Queries & Fallbacks
 """
 
 import sys
@@ -58,9 +59,11 @@ class TestDataCleaning(unittest.TestCase):
         self.assertEqual(standardize_merchant_id('mch1234'), 'MCH1234')
         self.assertEqual(standardize_merchant_id('MCH-1234'), 'MCH1234')
         self.assertEqual(standardize_merchant_id('1234'), 'MCH1234')
+        self.assertIsNone(standardize_merchant_id(''))
 
         self.assertEqual(standardize_txn_id('TXN00011869'), 'TXN00011869')
         self.assertEqual(standardize_txn_id('11869'), 'TXN00011869')
+        self.assertEqual(standardize_complaint_id('CBK0012345'), 'CBK0012345')
 
     def test_amount_cleaner(self):
         self.assertEqual(clean_amount('15722.34'), 15722.34)
@@ -69,6 +72,7 @@ class TestDataCleaning(unittest.TestCase):
         self.assertEqual(clean_amount('17,833.99'), 17833.99)
         self.assertEqual(clean_amount('-23820.57'), 23820.57)
         self.assertEqual(clean_amount('27.3k'), 27300.0)
+        self.assertEqual(clean_amount('1.5M'), 1500000.0)
         self.assertIsNone(clean_amount(''))
         self.assertIsNone(clean_amount('N/A'))
 
@@ -93,6 +97,10 @@ class TestDataCleaning(unittest.TestCase):
         utr_clean2, is_valid2 = clean_utr('UTR 2787678319')
         self.assertEqual(utr_clean2, 'UTR2787678319')
         self.assertTrue(is_valid2)
+
+        utr_clean3, is_valid3 = clean_utr('2787678319')
+        self.assertEqual(utr_clean3, 'UTR2787678319')
+        self.assertTrue(is_valid3)
 
         utr_none, is_valid_none = clean_utr(None)
         self.assertIsNone(utr_none)
@@ -149,6 +157,15 @@ class TestAnalyticsAndGraphEngine(unittest.TestCase):
         self.assertGreater(kpis['chargeback_count'], 0)
         self.assertGreater(kpis['kyc_completion_rate'], 0.5)
 
+    def test_slice_filtering(self):
+        # Filter by grocery
+        filtered = self.engine.filter_data(categories=['Grocery Stores'])
+        self.assertGreater(len(filtered), 0)
+        self.assertTrue((filtered['merchant_category'] == 'Grocery Stores').all())
+
+        kpis_filtered = self.engine.get_summary_kpis(filtered)
+        self.assertEqual(kpis_filtered['total_transaction_count'], len(filtered))
+
     def test_merchant_category_metrics(self):
         cat_df = self.engine.get_merchant_category_metrics()
         self.assertGreater(len(cat_df), 0)
@@ -160,6 +177,15 @@ class TestAnalyticsAndGraphEngine(unittest.TestCase):
         risk_mch = self.engine.get_high_risk_merchants()
         self.assertGreater(len(risk_mch), 0)
         self.assertIn('risk_score', risk_mch.columns)
+
+    def test_ticket_size_anomalies(self):
+        anomalies = self.engine.get_merchant_ticket_anomalies(ratio_threshold=2.0)
+        self.assertIsInstance(anomalies, pd.DataFrame)
+
+    def test_utr_health(self):
+        utr_stats = self.engine.get_utr_health_metrics()
+        self.assertGreater(utr_stats['valid_utr_count'], 0)
+        self.assertIn('invalid_utr_dispute_rate', utr_stats)
 
     def test_fraud_rings_detection(self):
         rings = self.graph_engine.detect_shared_account_rings()
@@ -184,7 +210,8 @@ class TestAnalyticsAndGraphEngine(unittest.TestCase):
             "Compare chargebacks by severity level.",
             "Show disputes reported after 7 days.",
             "Which merchant has the highest chargeback-to-transaction ratio?",
-            "Detect mule accounts and fraud rings."
+            "Detect mule accounts and fraud rings.",
+            "Show merchant ticket size anomalies."
         ]
 
         for q in test_queries:

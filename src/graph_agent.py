@@ -122,7 +122,6 @@ class FraudGraphEngine:
         for acc in settle_nodes:
             neighbors = [n for n in self.G.neighbors(acc) if self.G.nodes[n].get('node_type') == 'merchant']
             if len(neighbors) > 1:
-                # Multiple merchants sharing account
                 total_txns = 0
                 total_disputes = 0
                 disputed_amt = 0.0
@@ -158,14 +157,12 @@ class FraudGraphEngine:
                     "risk_level": "CRITICAL" if total_disputes > 0 else "HIGH"
                 })
                 
-        return sorted(rings, key=lambda r: r['total_disputes'], reverse=True)
+        return sorted(rings, key=lambda r: (r['total_disputes'], r['merchant_count']), reverse=True)
 
     def detect_collusive_fraud_clusters(self, min_disputes: int = 2) -> List[Dict[str, Any]]:
         """
-        Detects collusive syndicates where clusters of high-risk customers repeatedly transact
-        and raise systematic chargebacks against high-risk merchants.
+        Detects connected bipartite subgraphs of users and merchants with dense dispute and failure activity.
         """
-        # Create dispute subgraph
         dispute_edges = [
             (u, v, d) for u, v, d in self.G.edges(data=True)
             if d.get('dispute_count', 0) >= 1
@@ -189,7 +186,6 @@ class FraudGraphEngine:
             tot_disp_amt = sum(d.get('disputed_amount', 0.0) for _, _, d in subg.edges(data=True))
             
             if tot_disputes >= min_disputes or len(users) >= 2 or len(merchants) >= 2:
-                # Calculate syndicate risk score
                 unverified_users = sum(1 for u in users if self.G.nodes[u].get('kyc_status') in ['REJECTED', 'PENDING', 'UNREGISTERED'])
                 suspended_mch = sum(1 for m in merchants if self.G.nodes[m].get('status') in ['SUSPENDED', 'ON_HOLD', 'INACTIVE'])
                 
@@ -219,7 +215,6 @@ class FraudGraphEngine:
         """
         center_node = center_node.strip().upper()
         if not self.G.has_node(center_node):
-            # Try fuzzy matching or formatting
             digits = re.sub(r'\D', '', center_node)
             if 'USR' in center_node or len(digits) == 5:
                 center_node = f"USR{int(digits):05d}"
@@ -229,10 +224,8 @@ class FraudGraphEngine:
         if not self.G.has_node(center_node):
             return {"error": f"Node {center_node} not found in transaction network."}
             
-        # Extract ego graph
         subg = nx.ego_graph(self.G, center_node, radius=hops)
         if subg.number_of_nodes() > max_nodes:
-            # Truncate to top connected nodes
             nodes_by_degree = sorted(subg.nodes(), key=lambda n: subg.degree(n), reverse=True)[:max_nodes]
             if center_node not in nodes_by_degree:
                 nodes_by_degree.append(center_node)
@@ -292,7 +285,7 @@ class AgentIQAssistant:
         q = query.strip().lower()
         
         # Query 1: Daily transaction volume trend
-        if any(w in q for w in ['daily transaction volume', 'volume trend', 'daily volume', 'transaction volume trend']):
+        if any(w in q for w in ['daily transaction volume', 'volume trend', 'daily volume', 'transaction volume trend', 'daily trend']):
             df = self.engine.get_daily_trends()
             total_vol = df['total_amount'].sum()
             avg_daily_vol = df['total_amount'].mean()
@@ -309,7 +302,7 @@ class AgentIQAssistant:
             }
 
         # Query 2: Compare successful vs failed transactions by day
-        elif any(w in q for w in ['compare successful vs failed', 'success vs failed', 'failed vs success', 'successful vs failed by day']):
+        elif any(w in q for w in ['compare successful vs failed', 'success vs failed', 'failed vs success', 'successful vs failed by day', 'failure trend by day']):
             df = self.engine.get_daily_trends()
             tot_success = df['success_count'].sum()
             tot_failed = df['failed_count'].sum()
@@ -326,13 +319,13 @@ class AgentIQAssistant:
             }
 
         # Query 3: Total transaction amount by merchant category / Category performance
-        elif any(w in q for w in ['by merchant category', 'category amount', 'transaction amount by category', 'merchant category performance']):
+        elif any(w in q for w in ['by merchant category', 'category amount', 'transaction amount by category', 'merchant category performance', 'top merchant categories']):
             df = self.engine.get_merchant_category_metrics()
             top_cat = df.iloc[0]
             
             return {
                 "title": "Transaction Performance by Merchant Category",
-                "text": f"The top category by transaction volume is **{top_cat['merchant_category']}** generating **₹{top_cat['total_amount']:,.2f}** across **{top_cat['txn_count']:,}** transactions. It has a dispute rate of **{top_cat['dispute_rate']:.2%}**.",
+                "text": f"The top category by transaction volume is **{top_cat['merchant_category']}** generating **₹{top_cat['total_amount']:,.2f}** across **{top_cat['txn_count']:,}** transactions with a dispute rate of **{top_cat['dispute_rate']:.2%}**.",
                 "data": df[['merchant_category', 'txn_count', 'total_amount', 'avg_ticket_size', 'chargeback_count', 'dispute_rate', 'failure_rate']],
                 "chart_type": "bar",
                 "x": "merchant_category",
@@ -341,7 +334,7 @@ class AgentIQAssistant:
             }
 
         # Query 4: Highest chargeback count merchant
-        elif any(w in q for w in ['highest chargeback count', 'top merchants by chargeback count', 'merchant with highest chargeback']):
+        elif any(w in q for w in ['highest chargeback count', 'top merchants by chargeback count', 'merchant with highest chargeback', 'merchants by chargeback count']):
             df = self.engine.get_top_merchants_by_chargebacks(top_n=10)
             top_mch = df.iloc[0]
             
@@ -356,7 +349,7 @@ class AgentIQAssistant:
             }
 
         # Query 5: Merchant category with highest disputed amount
-        elif any(w in q for w in ['highest disputed amount', 'category has the highest disputed amount', 'disputed amount by category']):
+        elif any(w in q for w in ['highest disputed amount', 'category has the highest disputed amount', 'disputed amount by category', 'dispute rate by merchant category']):
             df = self.engine.get_merchant_category_metrics().sort_values('disputed_amount', ascending=False)
             top_disp = df.iloc[0]
             
@@ -371,7 +364,7 @@ class AgentIQAssistant:
             }
 
         # Query 6: Chargeback reason distribution
-        elif any(w in q for w in ['chargeback reason', 'reason distribution', 'dispute reason distribution']):
+        elif any(w in q for w in ['chargeback reason', 'reason distribution', 'dispute reason distribution', 'chargeback reason distribution']):
             df = self.engine.get_chargeback_reasons()
             top_r = df.iloc[0]
             
@@ -385,7 +378,7 @@ class AgentIQAssistant:
             }
 
         # Query 7: Top users by disputed amount / High-risk users
-        elif any(w in q for w in ['top 10 users', 'users by disputed amount', 'top users by disputed amount', 'high-risk users']):
+        elif any(w in q for w in ['top 10 users', 'users by disputed amount', 'top users by disputed amount', 'high-risk users', 'users with repeated disputes']):
             df = self.engine.get_high_risk_users(top_n=10)
             top_u = df.iloc[0]
             
@@ -400,13 +393,13 @@ class AgentIQAssistant:
             }
 
         # Query 8: Average transaction value trend
-        elif any(w in q for w in ['average transaction value', 'atv trend', 'avg transaction value trend']):
+        elif any(w in q for w in ['average transaction value', 'atv trend', 'avg transaction value trend', 'atv over time']):
             df = self.engine.get_daily_trends()
             overall_atv = self.engine.df_txn['amount'].mean()
             
             return {
                 "title": "Average Transaction Value (ATV) Trend Over Time",
-                "text": f"The overall Average Transaction Value (ATV) across all settled payments is **₹{overall_atv:,.2f}**. Daily ATV remains stable within standard payment bands.",
+                "text": f"The overall Average Transaction Value (ATV) across all settled payments is **₹{overall_atv:,.2f}**. Daily ATV remains stable across observed billing cycles.",
                 "data": df[['date', 'avg_amount', 'txn_count', 'total_amount']],
                 "chart_type": "line",
                 "x": "date",
@@ -415,7 +408,7 @@ class AgentIQAssistant:
             }
 
         # Query 9: KYC status transaction amount
-        elif any(w in q for w in ['kyc status has the highest', 'kyc status transaction amount', 'transaction amount by kyc']):
+        elif any(w in q for w in ['kyc status has the highest', 'kyc status transaction amount', 'transaction amount by kyc', 'kyc status distribution']):
             df = self.engine.get_kyc_status_breakdown()
             top_kyc = df.iloc[0]
             
@@ -430,12 +423,12 @@ class AgentIQAssistant:
             }
 
         # Query 10: Compare chargebacks by severity level
-        elif any(w in q for w in ['severity level', 'chargebacks by severity', 'dispute severity']):
+        elif any(w in q for w in ['severity level', 'chargebacks by severity', 'dispute severity', 'severity distribution']):
             df = self.engine.get_chargeback_severity()
             
             return {
                 "title": "Chargebacks by Severity Level",
-                "text": f"Disputes broken down by SLA priority tier:\n" + "\n".join([f"- **{r['severity']}**: {r['complaint_count']:,} cases ({r['share_of_complaints']:.2%}), Total: ₹{r['total_disputed_amount']:,.2f}" for _, r in df.iterrows()]),
+                "text": "Disputes broken down by SLA priority tier:\n" + "\n".join([f"- **{r['severity']}**: {r['complaint_count']:,} cases ({r['share_of_complaints']:.2%}), Total: ₹{r['total_disputed_amount']:,.2f}" for _, r in df.iterrows()]),
                 "data": df[['severity', 'complaint_count', 'total_disputed_amount', 'avg_disputed_amount', 'share_of_complaints']],
                 "chart_type": "bar",
                 "x": "severity",
@@ -444,7 +437,7 @@ class AgentIQAssistant:
             }
 
         # Query 11: Disputes reported after 7 days (Delayed reporting)
-        elif any(w in q for w in ['after 7 days', 'disputes reported after', 'reporting delay', 'delayed disputes']):
+        elif any(w in q for w in ['after 7 days', 'disputes reported after', 'reporting delay', 'delayed disputes', 'disputes reported after long delays']):
             df_cb = self.engine.df_cb
             delayed = df_cb[df_cb['reporting_delay_days'] > 7]
             tot_cb = len(df_cb)
@@ -457,7 +450,7 @@ class AgentIQAssistant:
             }
 
         # Query 12: Highest chargeback-to-transaction ratio merchant
-        elif any(w in q for w in ['highest chargeback-to-transaction ratio', 'highest chargeback ratio', 'dispute ratio merchant']):
+        elif any(w in q for w in ['highest chargeback-to-transaction ratio', 'highest chargeback ratio', 'dispute ratio merchant', 'high-risk merchants']):
             df = self.engine.get_high_risk_merchants(min_txns=3, top_n=10)
             top_ratio_mch = df.iloc[0]
             
@@ -472,7 +465,7 @@ class AgentIQAssistant:
             }
 
         # Query 13: Fraud rings / Syndicates / Mule accounts
-        elif any(w in q for w in ['fraud ring', 'mule', 'syndicate', 'shared account', 'clusters']):
+        elif any(w in q for w in ['fraud ring', 'mule', 'syndicate', 'shared account', 'clusters', 'detect mule accounts']):
             rings = self.graph.detect_shared_account_rings()
             clusters = self.graph.detect_collusive_fraud_clusters()
             
@@ -490,12 +483,34 @@ class AgentIQAssistant:
                 "chart_type": "table"
             }
 
+        # Query 14: Ticket size anomalies / Spike detection
+        elif any(w in q for w in ['spike', 'ticket size anomaly', 'anomalies', 'ticket divergence']):
+            anomalies = self.engine.get_merchant_ticket_anomalies(ratio_threshold=2.5, top_n=10)
+            if not anomalies.empty:
+                top_anom = anomalies.iloc[0]
+                return {
+                    "title": "Merchant Ticket Size Divergence Anomalies",
+                    "text": f"Identified **{len(anomalies)}** merchants whose actual average transaction amount exceeds their declared onboarding ticket size by >250%. Top divergence: **{top_anom['merchant_name']} ({top_anom['merchant_id']})** with actual avg ₹{top_anom['actual_avg_ticket']:,.2f} vs declared ₹{top_anom['declared_avg_ticket']:,.2f} ({top_anom['ticket_divergence_ratio']:.1f}x divergence).",
+                    "data": anomalies[['merchant_id', 'merchant_name', 'merchant_category', 'declared_avg_ticket', 'actual_avg_ticket', 'ticket_divergence_ratio', 'chargeback_count']],
+                    "chart_type": "bar",
+                    "x": "merchant_name",
+                    "y": "ticket_divergence_ratio",
+                    "y_label": "Ticket Divergence Multiple (x)"
+                }
+            else:
+                return {
+                    "title": "Merchant Ticket Size Anomalies",
+                    "text": "No extreme ticket size divergence anomalies detected above the 2.5x threshold.",
+                    "data": pd.DataFrame(),
+                    "chart_type": "table"
+                }
+
         # Fallback / General Search
         else:
             kpis = self.engine.get_summary_kpis()
             return {
                 "title": f"FinTech Analytics Overview for '{query}'",
-                "text": f"Found **{kpis['total_transaction_count']:,}** total transactions valued at **₹{kpis['total_transaction_amount']:,.2f}**. Success rate is **{kpis['success_transaction_rate']:.2%}**, Failed rate is **{kpis['failed_transaction_rate']:.2%}**, with **{kpis['chargeback_count']:,}** total chargebacks (Overall dispute rate: **{kpis['chargeback_to_transaction_ratio']:.2%}**).",
+                "text": f"Found **{kpis['total_transaction_count']:,}** total transactions valued at **₹{kpis['total_transaction_amount']:,.2f}**. Success rate is **{kpis['success_transaction_rate']:.2%}**, Failed rate is **{kpis['failed_transaction_rate']:.2%}**, with **{kpis['chargeback_count']:,}** total chargebacks (Overall dispute rate: **{kpis['chargeback_to_transaction_ratio']:.2%}**).\n\n*Tip: Try querying daily volume trends, category performance, high-risk merchants, dispute reasons, or fraud rings!*",
                 "data": pd.DataFrame([kpis]),
                 "chart_type": "table"
             }
