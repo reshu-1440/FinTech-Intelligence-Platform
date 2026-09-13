@@ -56,8 +56,11 @@ class AnalyticsEngine:
             
         if end_date is not None:
             e_ts = pd.to_datetime(end_date)
-            # Include end of day
-            if hasattr(end_date, 'hour') and end_date.hour == 0:
+            # Include full end-of-day for dates/timestamps with 00:00:00
+            if hasattr(end_date, 'time'):
+                if end_date.hour == 0 and end_date.minute == 0 and end_date.second == 0:
+                    e_ts = e_ts + pd.Timedelta(days=1, microseconds=-1)
+            else:
                 e_ts = e_ts + pd.Timedelta(days=1, microseconds=-1)
             df = df[df['timestamp'] <= e_ts]
             

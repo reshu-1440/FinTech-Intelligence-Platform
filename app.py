@@ -153,11 +153,19 @@ st.sidebar.markdown("Filter all KPIs, charts, and metrics dynamically.")
 min_date = engine.df_txn['timestamp'].min().date()
 max_date = engine.df_txn['timestamp'].max().date()
 
+def reset_filters():
+    st.session_state["filter_date_range"] = (min_date, max_date)
+    st.session_state["filter_categories"] = []
+    st.session_state["filter_kyc"] = []
+    st.session_state["filter_statuses"] = []
+    st.session_state["filter_risk"] = []
+
 selected_date_range = st.sidebar.date_input(
     "Date Range",
     value=(min_date, max_date),
     min_value=min_date,
-    max_value=max_date
+    max_value=max_date,
+    key="filter_date_range"
 )
 
 start_date = selected_date_range[0] if len(selected_date_range) > 0 else min_date
@@ -168,7 +176,8 @@ all_categories = sorted(list(engine.df_unified['merchant_category'].dropna().uni
 selected_categories = st.sidebar.multiselect(
     "Merchant Categories",
     options=all_categories,
-    default=[]
+    default=[],
+    key="filter_categories"
 )
 
 # 3. KYC Statuses
@@ -176,7 +185,8 @@ all_kyc = sorted(list(engine.df_unified['kyc_status'].dropna().unique()))
 selected_kyc = st.sidebar.multiselect(
     "Customer KYC Status",
     options=all_kyc,
-    default=[]
+    default=[],
+    key="filter_kyc"
 )
 
 # 4. Transaction Status
@@ -184,7 +194,8 @@ all_statuses = ['SUCCESS', 'FAILED', 'PENDING']
 selected_statuses = st.sidebar.multiselect(
     "Transaction Status",
     options=all_statuses,
-    default=[]
+    default=[],
+    key="filter_statuses"
 )
 
 # 5. Customer Risk Segment
@@ -192,7 +203,8 @@ all_risk = sorted(list(engine.df_unified['risk_segment'].dropna().unique()))
 selected_risk = st.sidebar.multiselect(
     "Customer Risk Tier",
     options=all_risk,
-    default=[]
+    default=[],
+    key="filter_risk"
 )
 
 # Apply dynamic filtering
@@ -209,8 +221,7 @@ kpis = engine.get_summary_kpis(filtered_df)
 
 st.sidebar.markdown("---")
 st.sidebar.markdown(f"**Filtered Slice**: {len(filtered_df):,} / {len(engine.df_unified):,} txns")
-if st.sidebar.button("🔄 Reset All Filters", use_container_width=True):
-    st.rerun()
+st.sidebar.button("🔄 Reset All Filters", on_click=reset_filters, use_container_width=True)
 
 # ==========================================
 # HEADER & TOP KPIS
